@@ -98,10 +98,12 @@ class PlaterParser(BaseParser):
 
 
 class WagoUpdater:
-    def __init__(self, username, accountname, apikey):
-        self.username = username
-        self.accountName = accountname
-        self.apiKey = apikey
+    def __init__(self, config, masterconfig):
+        self.username = config['WAUsername']
+        self.accountName = config['WAAccountName']
+        self.apiKey = config['WAAPIKey']
+        self.retailTOC = masterconfig['RetailTOC']
+        self.classicTOC = masterconfig['ClassicTOC']
         self.bbParser = bbcode.Parser()
         Markdown.output_formats['plain'] = markdown_unmark_element
         self.mdParser = Markdown(output_format='plain')
@@ -109,12 +111,16 @@ class WagoUpdater:
         if self.username == 'DISABLED':
             self.username = ''
 
+    def clean_string(self, s):
+        return s.replace('"', '\\"')
+
     @retry('Failed to parse Wago data.')
     def check_updates(self, addon):
         output = [[], []]
         if len(addon.list) > 0:
             payload = requests.get(f'https://data.wago.io/api/check/{addon.api}?ids={",".join(addon.list.keys())}',
-                                   headers={'api-key': self.apiKey, 'User-Agent': HEADERS['User-Agent']}).json()
+                                   headers={'api-key': self.apiKey, 'User-Agent': HEADERS['User-Agent']},
+                                   timeout=5).json()
             if 'error' in payload or 'msg' in payload:
                 raise RuntimeError
             for entry in payload:
@@ -123,12 +129,12 @@ class WagoUpdater:
                         entry['slug'] = entry['_id']
                     if entry['version'] > addon.list[entry['slug']] and (not entry['slug'] in addon.ignored or
                        (entry['slug'] in addon.ignored and entry['version'] != addon.ignored[entry['slug']])):
-                        output[0].append(entry['name'])
+                        output[0].append([entry['name'], entry['url']])
                         self.update_entry(entry, addon)
                     elif 'name' in entry:
-                        output[1].append(entry['name'])
-            output[0].sort()
-            output[1].sort()
+                        output[1].append([entry['name'], entry['url']])
+            output[0] = sorted(output[0], key=lambda v: v[0])
+            output[1] = sorted(output[1], key=lambda v: v[0])
         return output
 
     def parse_changelog(self, entry):
@@ -143,7 +149,7 @@ class WagoUpdater:
     @retry('Failed to parse Wago data.')
     def update_entry(self, entry, addon):
         raw = requests.get(f'https://data.wago.io/api/raw/encoded?id={entry["slug"]}',
-                           headers={'api-key': self.apiKey, 'User-Agent': HEADERS['User-Agent']}).text
+                           headers={'api-key': self.apiKey, 'User-Agent': HEADERS['User-Agent']}, timeout=5).text
         slug = f'    ["{entry["slug"]}"] = {{\n      name = [=[{entry["name"]}]=],\n      author = [=[' \
                f'{entry["username"]}]=],\n      encoded = [=[{raw}]=],\n      wagoVersion = [=[' \
                f'{entry["version"]}]=],\n      wagoSemver = [=[{entry["versionString"]}]=],\n      ' \
@@ -152,10 +158,10 @@ class WagoUpdater:
         ids = ''
         for u in addon.uids:
             if addon.uids[u] == entry["slug"]:
-                uids = uids + f'    ["{u}"] = [=[{entry["slug"]}]=],\n'
+                uids = uids + f'    ["{self.clean_string(u)}"] = [=[{entry["slug"]}]=],\n'
         for i in addon.ids:
             if addon.ids[i] == entry["slug"]:
-                ids = ids + f'    ["{i}"] = [=[{entry["slug"]}]=],\n'
+                ids = ids + f'    ["{self.clean_string(i)}"] = [=[{entry["slug"]}]=],\n'
         addon.data['slugs'].append(slug)
         addon.data['uids'].append(uids)
         addon.data['ids'].append(ids)
@@ -183,10 +189,10 @@ class WagoUpdater:
         if not os.path.isdir(Path('Interface/AddOns/WeakAurasCompanion')) or force:
             Path('Interface/AddOns/WeakAurasCompanion').mkdir(exist_ok=True)
             with open(Path('Interface/AddOns/WeakAurasCompanion/WeakAurasCompanion.toc'), 'w', newline='\n') as out:
-                out.write(f'## Interface: {"11305" if client_type == "wow_classic" else "80300"}\n## Title: WeakAu'
-                          f'ras Companion\n## Author: The WeakAuras Team\n## Version: 1.1.0\n## Notes: Keep your WeakAu'
-                          f'ras updated!\n## X-Category: Interface Enhancements\n## DefaultState: Enabled\n## LoadOnDem'
-                          f'and: 0\n## OptionalDeps: WeakAuras, Plater\n\ndata.lua\ninit.lua')
+                out.write(f'## Interface: {self.classicTOC if client_type == "wow_classic" else self.retailTOC}\n## Tit'
+                          f'le: WeakAuras Companion\n## Author: The WeakAuras Team\n## Version: 1.1.1\n## Notes: Keep y'
+                          f'our WeakAuas updated!\n## X-Category: Interface Enhancements\n## DefaultState: Enabled\n## '
+                          f'LoadOnDemand: 0\n## OptionalDeps: WeakAuras, Plater\n\ndata.lua\ninit.lua')
             with open(Path('Interface/AddOns/WeakAurasCompanion/init.lua'), 'w', newline='\n') as out:
                 out.write('-- file generated automatically\nlocal buildTimeTarget = 20190123023201\nlocal waBuildTime ='
                           ' tonumber(WeakAuras and WeakAuras.buildTime or 0)\nif waBuildTime and waBuildTime > buildTim'
